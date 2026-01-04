@@ -1,0 +1,9 @@
+{
+  "name": "Rival AI Assistant",
+  "description": "A powerful multi-modal AI assistant capable of advanced reasoning, image generation, and live code execution.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
