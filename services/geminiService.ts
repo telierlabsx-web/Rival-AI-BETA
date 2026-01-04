@@ -1,30 +1,14 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { Message, ConversationMode, EbookData, MapData } from "../types";
 
 /**
- * RIVAL MULTI-CORE ROTATION SYSTEM
- * Mendukung 1 hingga 50+ API Key dengan proper sequential rotation
+ * RIVAL SMART ROTATION & RETRY SYSTEM
+ * Mengambil daftar key dan membersihkan whitespace/karakter ilegal.
  */
-let currentKeyIndex = 0;
-let apiKeys: string[] = [];
-
-const initializeKeys = () => {
-  if (apiKeys.length === 0) {
-    const rawKeys = process.env.API_KEY || '';
-    if (rawKeys.includes(',')) {
-      apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
-    } else {
-      apiKeys = [rawKeys];
-    }
-  }
-};
-
-const getApiKey = () => {
-  initializeKeys();
-  const key = apiKeys[currentKeyIndex];
-  currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length; // Sequential rotation
-  console.log(`[RIVAL] Using API Key ${currentKeyIndex}/${apiKeys.length}`);
-  return key;
+const getAllAvailableKeys = () => {
+  const rawKeys = process.env.API_KEY || '';
+  return rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
 };
 
 export const geminiService = {
@@ -34,157 +18,128 @@ export const geminiService = {
     mode: ConversationMode,
     images?: string[],
     userLocation?: { lat: number; lng: number }
-  ) {
-    const apiKey = getApiKey();
-    const ai = new GoogleGenAI({ apiKey });
+  ): Promise<any> {
+    const keys = getAllAvailableKeys();
     
+    if (keys.length === 0) {
+      throw new Error("API_KEY tidak ditemukan di environment variable Vercel.");
+    }
+
     const lastUserMessage = messages.filter(m => m.role === 'user').pop();
     const contentText = (lastUserMessage?.content || "").toLowerCase();
     
-    // Intent Detection
+    // Identifikasi Kebutuhan
     const isImageRequest = contentText.match(/(gambar|lukis|draw|generate image|bikin foto|buatkan gambar|image|visualize)/i);
     const isCodeRequest = contentText.match(/(koding|coding|buatkan aplikasi|bikin web|app|script|program|javascript|html|website|dashboard)/i);
     const isEbookRequest = contentText.match(/\b(ebook|presentasi|slide|deck|buku digital)\b/i) && 
                           contentText.match(/\b(buat|bikin|buatkan|generate|susun)\b/i);
     const needsMaps = contentText.match(/(dimana|tempat|restoran|wisata|hotel|lokasi|dekat|maps|tunjukkan)/i);
 
-    // SYSTEM CORE INSTRUCTION - RIVAL BETA
-    let systemInstruction = `
-        ANDA ADALAH RIVAL (BETA DEPLOYMENT).
-        ROLE: MASTER ENGINEER & VISUAL ARCHITECT.
-
-        ATURAN KODING (ARTIFACTS):
-        - Jika user minta aplikasi/web/dashboard, ANDA WAJIB MEMBERIKAN KODE UTUH (HTML/Tailwind/JS).
-        - Gunakan CDN Tailwind, Lucide Icons, dan GSAP untuk animasi agar aplikasi terlihat premium.
-        - Masukkan semua kode dalam SATU blok markdown tunggal (html).
-        - Jangan memberikan potongan kode, berikan SOLUSI FINAL yang bisa langsung dijalankan.
-
-        KEMAMPUAN RIVAL:
-        - Gambar: Anda bisa men-generate visual apa saja.
-        - Search: Gunakan Google Search untuk data terbaru atau link YouTube.
-        - UI: User bisa ganti tema, font, dan ui-scale di pengaturan.
-
-        GAYA BAHASA:
-        - Profesional, tegas, dan sangat cerdas.
-        - JANGAN GUNAKAN MARKDOWN BOLD (bintang *) karena merusak estetika clean UI.
-        - ${userPersona || "Fokus pada efisiensi sistem dan kualitas output."}
+    // Hardcoded Intelligence Core
+    const systemInstruction = `
+        ANDA ADALAH RIVAL (BETA). ROLE: MASTER ENGINEER & VISUAL ARCHITECT.
+        - KODING: Berikan kode HTML/Tailwind/JS lengkap dalam satu blok markdown.
+        - GAYA: Profesional, cerdas, tanpa simbol bintang (*) untuk bold.
+        - FITUR: Mampu gambar, cari web, dan navigasi maps.
+        - PERSONA USER: ${userPersona || "Bersikaplah sangat efisien."}
     `;
 
-    // 1. GENERATE IMAGE (Model: gemini-2.5-flash-image)
-    if (isImageRequest && !images?.length) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: [{ parts: [{ text: `Create a professional high-quality visual for: ${contentText}. Style: Ultra-modern, 4k, clean aesthetic.` }] }],
-        config: { imageConfig: { aspectRatio: "1:1" } }
-      });
-
-      let generatedImg = "";
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData) {
-          generatedImg = `data:image/png;base64,${part.inlineData.data}`;
-        }
-      }
-      return { text: "Visual telah berhasil saya render. Ada yang lain?", imageUrl: generatedImg, codeSnippet: '', sources: [] };
-    }
-
-    // 2. TEXT/CODE/SEARCH (Model: Gemini 3 Flash/Pro)
+    // Pilih Model
     let modelName = 'gemini-3-flash-preview'; 
-    if (isEbookRequest || isCodeRequest) {
-      modelName = 'gemini-3-pro-preview'; // Upgrade ke PRO untuk tugas berat
-    } else if (needsMaps) {
-      modelName = 'gemini-2.5-flash';
-    }
+    if (isEbookRequest || isCodeRequest) modelName = 'gemini-3-pro-preview';
+    else if (needsMaps) modelName = 'gemini-2.5-flash';
 
+    // Persiapan Konten
     const contents: any[] = messages.map(m => ({
       role: m.role === 'user' ? 'user' : 'model',
       parts: [{ text: m.content }]
     }));
 
-    // Multi-modal Analysis (Jika user upload gambar)
     if (images && images.length > 0) {
       const lastMessage = contents[contents.length - 1];
       const imageParts = images.map(img => {
-        const parts = img.split(',');
-        const data = parts[1];
-        const mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+        const [header, data] = img.split(',');
+        const mimeType = header.match(/:(.*?);/)?.[1] || 'image/png';
         return { inlineData: { mimeType, data } };
       });
       lastMessage.parts = [...imageParts, ...lastMessage.parts];
     }
 
-    const config: any = { systemInstruction };
+    // --- SISTEM AUTO-RETRY (COBA HINGGA 3 KEY BERBEDA) ---
+    let lastErrorMessage = "";
+    const maxAttempts = Math.min(3, keys.length);
+    const usedKeyIndices = new Set<number>();
 
-    // Response Formatting
-    if (isEbookRequest) {
-      config.responseMimeType = "application/json";
-      config.responseSchema = {
-        type: Type.OBJECT,
-        properties: {
-          assistantMessage: { type: Type.STRING },
-          ebookData: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING },
-              title: { type: Type.STRING },
-              author: { type: Type.STRING },
-              pages: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    content: { type: Type.STRING },
-                    visualPrompt: { type: Type.STRING },
-                    layout: { type: Type.STRING, enum: ['split', 'hero', 'minimal', 'sidebar', 'feature', 'gallery'] }
-                  }
-                }
-              }
-            }
-          }
-        }
-      };
-    } else if (needsMaps) {
-      config.tools = [{ googleMaps: {} }];
-    } else {
-      config.tools = [{ googleSearch: {} }];
-    }
-
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents,
-      config,
-    });
-
-    let text = response.text || "";
-    let ebookData: EbookData | undefined;
-    let codeSnippet = "";
-    let sources = [];
-    let mapData: MapData | undefined;
-
-    // Artifacts Extraction
-    const codeMatch = text.match(/```(?:html|javascript|css|typescript|xml)?\n([\s\S]*?)```/);
-    if (codeMatch) {
-      codeSnippet = codeMatch[1].trim();
-    }
-
-    if (isEbookRequest) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let randomIndex;
+      do {
+        randomIndex = Math.floor(Math.random() * keys.length);
+      } while (usedKeyIndices.has(randomIndex) && usedKeyIndices.size < keys.length);
+      
+      usedKeyIndices.add(randomIndex);
+      const activeKey = keys[randomIndex];
+      
       try {
-        const jsonRes = JSON.parse(text);
-        text = jsonRes.assistantMessage;
-        ebookData = jsonRes.ebookData;
-      } catch (e) { /* fallback */ }
-    } else {
-      const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
-      sources = groundingMetadata?.groundingChunks?.map((chunk: any) => {
-        if (chunk.web) return { title: chunk.web.title, url: chunk.web.uri, snippet: '' };
-        if (chunk.maps) {
-          if (!mapData) mapData = { title: chunk.maps.title, location: 'Lokasi Terdeteksi', latitude: 0, longitude: 0, uri: chunk.maps.uri };
-          return { title: chunk.maps.title, url: chunk.maps.uri, snippet: 'Maps' };
+        const ai = new GoogleGenAI({ apiKey: activeKey });
+
+        // Spesifik untuk Generate Gambar
+        if (isImageRequest && !images?.length) {
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: [{ parts: [{ text: `Create visual for: ${contentText}` }] }]
+          });
+          
+          let generatedImg = "";
+          for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) generatedImg = `data:image/png;base64,${part.inlineData.data}`;
+          }
+          return { text: "Visual diproses.", imageUrl: generatedImg, codeSnippet: '', sources: [] };
         }
-        return null;
-      }).filter(Boolean) || [];
+
+        // Request Standar (Text/Code/Search)
+        const config: any = { systemInstruction };
+        if (isEbookRequest) {
+          config.responseMimeType = "application/json";
+          config.responseSchema = { type: Type.OBJECT, properties: { assistantMessage: { type: Type.STRING }, ebookData: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, pages: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, content: { type: Type.STRING }, layout: { type: Type.STRING } } } } } } } };
+        } else if (needsMaps) {
+          config.tools = [{ googleMaps: {} }];
+        } else {
+          config.tools = [{ googleSearch: {} }];
+        }
+
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents,
+          config,
+        });
+
+        // Jika sampai sini, artinya BERHASIL
+        let text = response.text || "";
+        let codeSnippet = "";
+        let codeMatch = text.match(/```(?:html|javascript|css)?\n([\s\S]*?)```/);
+        if (codeMatch) codeSnippet = codeMatch[1].trim();
+
+        const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
+        const sources = groundingMetadata?.groundingChunks?.map((chunk: any) => {
+          if (chunk.web) return { title: chunk.web.title, url: chunk.web.uri, snippet: '' };
+          return null;
+        }).filter(Boolean) || [];
+
+        return { text, imageUrl: "", codeSnippet, sources };
+
+      } catch (err: any) {
+        lastErrorMessage = err.message || "Unknown Error";
+        console.warn(`Attempt ${attempt + 1} failed with Key Index ${randomIndex}:`, lastErrorMessage);
+        
+        // Jika errornya adalah "Model Not Found", jangan retry pake key lain karena masalahnya di nama model
+        if (lastErrorMessage.includes("not found")) break;
+        
+        // Lanjut ke loop berikutnya (coba key lain)
+      }
     }
 
-    return { text, imageUrl: "", codeSnippet, sources, ebookData, mapData };
+    // Jika semua attempt gagal
+    console.error("Rival Multi-Core Failure:", lastErrorMessage);
+    throw new Error(`Rival Error: ${lastErrorMessage}`);
   }
 };
