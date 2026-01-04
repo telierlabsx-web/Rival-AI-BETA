@@ -2,11 +2,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Message, ConversationMode, EbookData, MapData } from "../types";
 
-// Sistem Rotasi API Key (Mendukung 20+ key yang dipisah koma di Vercel)
+/**
+ * RIVAL MULTI-CORE ROTATION SYSTEM
+ * Mendukung 1 hingga 50+ API Key yang dipisah dengan koma di environment variable.
+ */
 const getApiKey = () => {
   const rawKeys = process.env.API_KEY || '';
   if (rawKeys.includes(',')) {
     const keys = rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
+    // Randomize antar key yang tersedia untuk load balancing
     return keys[Math.floor(Math.random() * keys.length)];
   }
   return rawKeys;
@@ -26,39 +30,40 @@ export const geminiService = {
     const lastUserMessage = messages.filter(m => m.role === 'user').pop();
     const contentText = (lastUserMessage?.content || "").toLowerCase();
     
-    // Deteksi Intent buat milih model yang pas
-    const isImageRequest = contentText.match(/(gambar|lukis|draw|generate image|bikin foto|buatkan gambar|image)/i);
-    const isCodeRequest = contentText.match(/(koding|coding|buatkan aplikasi|bikin web|app|script|program|javascript|html|website)/i);
+    // Intent Detection
+    const isImageRequest = contentText.match(/(gambar|lukis|draw|generate image|bikin foto|buatkan gambar|image|visualize)/i);
+    const isCodeRequest = contentText.match(/(koding|coding|buatkan aplikasi|bikin web|app|script|program|javascript|html|website|dashboard)/i);
     const isEbookRequest = contentText.match(/\b(ebook|presentasi|slide|deck|buku digital)\b/i) && 
                           contentText.match(/\b(buat|bikin|buatkan|generate|susun)\b/i);
     const needsMaps = contentText.match(/(dimana|tempat|restoran|wisata|hotel|lokasi|dekat|maps|tunjukkan)/i);
 
-    // Otak Utama Rival (Hardcoded System Instruction)
+    // SYSTEM CORE INSTRUCTION - RIVAL BETA
     let systemInstruction = `
-        IDENTITAS SISTEM:
-        Anda adalah RIVAL, asisten AI tingkat tinggi dalam tahap "BETA Deployment".
-        
-        KEMAMPUAN EKSKLUSIF RIVAL (Jelaskan ini jika user bertanya kelebihan/fitur):
-        1. Custom UI/UX: User bisa mengganti warna tema (White, Black, Cream, Slate) sesuka hati.
-        2. Tipografi Bebas: Tersedia lebih banyak gaya font profesional dan pengaturan ukuran teks/skala UI.
-        3. YouTube & Web Summary: Mampu meringkas video YT dan mencari sumber web terverifikasi secara real-time.
-        4. Multi-Modal Master: Mampu menganalisis banyak foto sekaligus dan MENGHASILKAN GAMBAR.
-        5. Live Artifacts: Mampu mengoding APLIKASI FULL (HTML/Tailwind/JS) yang bisa langsung dijalankan.
+        ANDA ADALAH RIVAL (BETA DEPLOYMENT).
+        ROLE: MASTER ENGINEER & VISUAL ARCHITECT.
 
-        INSTRUKSI KODING (PENTING):
-        Jika user minta dibuatkan aplikasi, web, atau script, berikan KODE LENGKAP dalam SATU BLOK MARKDOWN (html/javascript). Kode harus fungsional, menggunakan Tailwind CSS untuk estetika, dan SIAP PAKAI.
+        ATURAN KODING (ARTIFACTS):
+        - Jika user minta aplikasi/web/dashboard, ANDA WAJIB MEMBERIKAN KODE UTUH (HTML/Tailwind/JS).
+        - Gunakan CDN Tailwind, Lucide Icons, dan GSAP untuk animasi agar aplikasi terlihat premium.
+        - Masukkan semua kode dalam SATU blok markdown tunggal (html).
+        - Jangan memberikan potongan kode, berikan SOLUSI FINAL yang bisa langsung dijalankan.
 
-        INSTRUKSI PERSONA:
-        - Jawab dengan gaya konsultan profesional, cerdas, dan to-the-point.
-        - JANGAN PERNAH gunakan simbol bintang (*) untuk menebalan (bold) atau list. Gunakan teks polos atau penomoran.
-        - Jika user memberikan instruksi tambahan di box persona: "${userPersona || "Tidak ada instruksi tambahan, tetaplah menjadi Rival yang jenius."}"
+        KEMAMPUAN RIVAL:
+        - Gambar: Anda bisa men-generate visual apa saja.
+        - Search: Gunakan Google Search untuk data terbaru atau link YouTube.
+        - UI: User bisa ganti tema, font, dan ui-scale di pengaturan.
+
+        GAYA BAHASA:
+        - Profesional, tegas, dan sangat cerdas.
+        - JANGAN GUNAKAN MARKDOWN BOLD (bintang *) karena merusak estetika clean UI.
+        - ${userPersona || "Fokus pada efisiensi sistem dan kualitas output."}
     `;
 
-    // Handle Gambar secara khusus pake Gemini Flash Image
+    // 1. GENERATE IMAGE (Model: gemini-2.5-flash-image)
     if (isImageRequest && !images?.length) {
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
-        contents: [{ parts: [{ text: `Generate a high quality image based on this request: ${contentText}. Style: Aesthetic and professional.` }] }],
+        contents: [{ parts: [{ text: `Create a professional high-quality visual for: ${contentText}. Style: Ultra-modern, 4k, clean aesthetic.` }] }],
         config: { imageConfig: { aspectRatio: "1:1" } }
       });
 
@@ -68,20 +73,23 @@ export const geminiService = {
           generatedImg = `data:image/png;base64,${part.inlineData.data}`;
         }
       }
-      return { text: "Visual telah saya buat sesuai permintaan Anda. Ada lagi yang bisa saya bantu?", imageUrl: generatedImg, codeSnippet: '', sources: [] };
+      return { text: "Visual telah berhasil saya render. Ada yang lain?", imageUrl: generatedImg, codeSnippet: '', sources: [] };
     }
 
-    // Logic Model Selection
+    // 2. TEXT/CODE/SEARCH (Model: Gemini 3 Flash/Pro)
     let modelName = 'gemini-3-flash-preview'; 
-    if (isEbookRequest || isCodeRequest) modelName = 'gemini-3-pro-preview'; // Pro buat koding & ebook
-    else if (needsMaps) modelName = 'gemini-2.5-flash';
+    if (isEbookRequest || isCodeRequest) {
+      modelName = 'gemini-3-pro-preview'; // Upgrade ke PRO untuk tugas berat
+    } else if (needsMaps) {
+      modelName = 'gemini-2.5-flash';
+    }
 
     const contents: any[] = messages.map(m => ({
       role: m.role === 'user' ? 'user' : 'model',
       parts: [{ text: m.content }]
     }));
 
-    // Masukin gambar kalo user upload foto buat dianalisis
+    // Multi-modal Analysis (Jika user upload gambar)
     if (images && images.length > 0) {
       const lastMessage = contents[contents.length - 1];
       const imageParts = images.map(img => {
@@ -93,9 +101,9 @@ export const geminiService = {
       lastMessage.parts = [...imageParts, ...lastMessage.parts];
     }
 
-    const config: any = { systemInstruction: systemInstruction };
+    const config: any = { systemInstruction };
 
-    // Mode Ebook (JSON Output)
+    // Response Formatting
     if (isEbookRequest) {
       config.responseMimeType = "application/json";
       config.responseSchema = {
@@ -132,8 +140,8 @@ export const geminiService = {
 
     const response = await ai.models.generateContent({
       model: modelName,
-      contents: contents,
-      config: config,
+      contents,
+      config,
     });
 
     let text = response.text || "";
@@ -142,7 +150,7 @@ export const geminiService = {
     let sources = [];
     let mapData: MapData | undefined;
 
-    // Ekstrak kode buat fitur Artifacts
+    // Artifacts Extraction
     const codeMatch = text.match(/```(?:html|javascript|css|typescript|xml)?\n([\s\S]*?)```/);
     if (codeMatch) {
       codeSnippet = codeMatch[1].trim();
