@@ -15,8 +15,6 @@ export const useChatLogic = (
   const [activeMode, setActiveMode] = useState<ConversationMode>('chat');
 
   const cleanTextFromCode = (text: string) => {
-    // Keep the markdown logic but allow the UI to decide whether to hide it
-    // For Artifacts, we often want to hide the block in the chat text but show the card
     return text
       .replace(/```(?:html|javascript|css|typescript|xml|json)?\n[\s\S]*?```/g, '')
       .replace(/\*/g, '')
@@ -43,7 +41,6 @@ export const useChatLogic = (
   ) => {
     if (!session || (!input.trim() && (!images || images.length === 0))) return;
 
-    // Visual mode logic
     if (activeMode === 'visual' && !checkImageLimit()) {
       setLimitError(true);
       return;
@@ -67,10 +64,7 @@ export const useChatLogic = (
       let assistantMsg: Message;
 
       if (profile.isOfflineMode) {
-        if (!offlineService.isReady()) {
-          await offlineService.init();
-        }
-        
+        if (!offlineService.isReady()) await offlineService.init();
         const offlineResponse = await offlineService.chat(input, currentMessages);
         assistantMsg = {
           id: (Date.now() + 1).toString(),
@@ -108,12 +102,24 @@ export const useChatLogic = (
 
       onUpdateMessages([...currentMessages, assistantMsg]);
       if (assistantMsg.imageUrl) incrementImageUsage();
-    } catch (error) {
-      console.error("Chat Error:", error);
+    } catch (error: any) {
+      console.error("RIVAL_CORE_ERROR:", error);
+      
+      const errorDetail = error.message || "Gangguan pada server Google.";
+      let userFriendlyError = `Maaf Bro, Rival gagal koneksi ke otak AI. Pesan Error: ${errorDetail}`;
+      
+      if (errorDetail.includes("API_KEY TIDAK TERDETEKSI")) {
+        userFriendlyError = "Bro, kayaknya variable 'API_KEY' lo di Vercel belum bener atau belum lo Redeploy. Coba cek lagi kuncinya!";
+      } else if (errorDetail.includes("API key not valid")) {
+        userFriendlyError = "Salah satu API Key yang lo masukin kayaknya invalid atau typo. Cek lagi di Google AI Studio.";
+      } else if (errorDetail.includes("quota")) {
+        userFriendlyError = "Batas gratisan Google (Quota) buat key ini udah abis, Bro! Coba ganti key baru.";
+      }
+
       const errorMsg: Message = {
         id: (Date.now() + 2).toString(),
         role: 'assistant',
-        content: "Maaf, Rival sedang mengalami gangguan teknis. Coba lagi dalam beberapa saat.",
+        content: userFriendlyError,
         timestamp: new Date()
       };
       onUpdateMessages([...currentMessages, errorMsg]);
