@@ -8,8 +8,8 @@ let keyPool: string[] = [];
 let keyIndex = 0;
 
 const initKeyPool = () => {
-  const rawKeys = process.env.GEMINI_API_KEY || ''; // ✅ TETEP PAKE GEMINI_API_KEY
-  if (!rawKeys) throw new Error('GEMINI_API_KEY tidak ditemukan di environment variables');
+  const rawKeys = process.env.API_KEY || ''; // 
+  if (!rawKeys) throw new Error('API_KEY tidak ditemukan di environment variables');
   
   keyPool = rawKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
   if (keyPool.length === 0) throw new Error('Tidak ada API key yang valid');
